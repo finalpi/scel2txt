@@ -54,21 +54,24 @@ func getDictMeta(b *bytes.Reader) (string, string, string, string) {
 	return title, category, desc, samples
 }
 
-func getPyMap(b *bytes.Reader) map[uint16]string {
+func getPyMap(b *bytes.Reader, hzOffset int64) map[uint16]string {
 	pyMap := make(map[uint16]string)
 	b.Seek(0x1540+4, 0)
 
 	for {
+		pos := b.Size() - int64(b.Len())
+		if pos+4 > hzOffset {
+			break
+		}
 		pyIdx := readUint16(b)
 		pyLen := readUint16(b)
+		pos = b.Size() - int64(b.Len())
+		if pos+int64(pyLen) > hzOffset {
+			break
+		}
 		pyStr := readUtf16Str(b, -1, int(pyLen))
-
 		if _, ok := pyMap[pyIdx]; !ok {
 			pyMap[pyIdx] = pyStr
-		}
-
-		if pyStr == "zuo" {
-			break
 		}
 	}
 	return pyMap
@@ -77,26 +80,49 @@ func getPyMap(b *bytes.Reader) map[uint16]string {
 func getRecords(b *bytes.Reader, fileSize int64, hzOffset int64, pyMap map[uint16]string) []string {
 	b.Seek(int64(hzOffset), io.SeekStart)
 	var records []string
-	for b.Size()-int64(b.Len()) != fileSize {
+	for b.Size()-int64(b.Len()) < fileSize {
+		if int64(b.Len()) < 4 {
+			break
+		}
 		wordCount := readUint16(b)
 		pyIdxCount := int(readUint16(b) / 2)
 
-		pySet := make([]string, pyIdxCount)
+		pyIndices := make([]uint16, pyIdxCount)
+		valid := true
 		for i := 0; i < pyIdxCount; i++ {
-			pyIdx := readUint16(b)
-			if py, ok := pyMap[pyIdx]; ok {
-				pySet[i] = py
-			} else {
+			if b.Len() < 2 {
 				return records
 			}
+			pyIndices[i] = readUint16(b)
+			if _, ok := pyMap[pyIndices[i]]; !ok {
+				valid = false
+			}
+		}
+
+		if !valid {
+			// 跳过整个词组
+			for i := 0; i < int(wordCount); i++ {
+				if b.Len() < 2 {
+					return records
+				}
+				wordLen := readUint16(b)
+				b.Seek(int64(wordLen)+12, io.SeekCurrent)
+			}
+			continue
+		}
+
+		pySet := make([]string, pyIdxCount)
+		for i, idx := range pyIndices {
+			pySet[i] = pyMap[idx]
 		}
 		pyStr := strings.Join(pySet, " ")
 
 		for i := 0; i < int(wordCount); i++ {
+			if b.Len() < 2 {
+				return records
+			}
 			wordLen := readUint16(b)
 			wordStr := readUtf16Str(b, -1, int(wordLen))
-
-			// 跳过 ext_len 和 ext 共 12 个字节
 			b.Seek(12, io.SeekCurrent)
 			records = append(records, fmt.Sprintf("%s\t%s", wordStr, pyStr))
 		}
@@ -113,7 +139,7 @@ func getWordsFromSogouCellDict(fname string) []string {
 
 	b := bytes.NewReader(data)
 	hzOffset := getHzOffset(b)
-	pyMap := getPyMap(b)
+	pyMap := getPyMap(b, hzOffset)
 	fileSize := int64(len(data))
 	words := getRecords(b, fileSize, hzOffset, pyMap)
 

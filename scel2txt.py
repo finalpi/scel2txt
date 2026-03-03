@@ -56,46 +56,51 @@ def get_dict_meta(f):
     return title, category, desc, samples
 
 
-def get_py_map(f):
+def get_py_map(f, hz_offset):
     py_map = {}
     f.seek(0x1540+4)
 
-    while True:
+    while f.tell() + 4 <= hz_offset:
         py_idx = read_uint16(f)
         py_len = read_uint16(f)
+        if f.tell() + py_len > hz_offset:
+            break
         py_str = read_utf16_str(f, -1, py_len)
-
         if py_idx not in py_map:
             py_map[py_idx] = py_str
-
-        # 如果拼音为 zuo，说明是最后一个了
-        if py_str == 'zuo':
-            break
     return py_map
 
 
 def get_records(f, file_size, hz_offset, py_map):
     f.seek(hz_offset)
     records = []
-    while f.tell() != file_size:
-        word_count = read_uint16(f)
-        py_idx_count = int(read_uint16(f) / 2)
+    while f.tell() < file_size:
+        try:
+            word_count = read_uint16(f)
+            py_idx_count = int(read_uint16(f) / 2)
+            py_indices = [read_uint16(f) for _ in range(py_idx_count)]
+        except struct.error:
+            break
 
-        py_set = []
-        for i in range(py_idx_count):
-            py_idx = read_uint16(f)
-            if (py_map.get(py_idx, None) == None):
-                return records
-            py_set.append(py_map[py_idx])
-        py_str = " ".join(py_set)
+        unknown = [idx for idx in py_indices if idx not in py_map]
+        if unknown:
+            try:
+                for _ in range(word_count):
+                    word_len = read_uint16(f)
+                    f.read(word_len + 12)
+            except struct.error:
+                break
+            continue
 
-        for i in range(word_count):
-            word_len = read_uint16(f)
-            word_str = read_utf16_str(f, -1, word_len)
-
-            # 跳过 ext_len 和 ext 共 12 个字节
-            f.read(12)
-            records.append((py_str, word_str))
+        py_str = " ".join(py_map[idx] for idx in py_indices)
+        try:
+            for i in range(word_count):
+                word_len = read_uint16(f)
+                word_str = read_utf16_str(f, -1, word_len)
+                f.read(12)
+                records.append((py_str, word_str))
+        except struct.error:
+            break
     return records
 
 
@@ -107,7 +112,7 @@ def get_words_from_sogou_cell_dict(fname):
         #print("title: %s\ncategory: %s\ndesc: %s\nsamples: %s" %
         #      (title, category, desc, samples))
 
-        py_map = get_py_map(f)
+        py_map = get_py_map(f, hz_offset)
 
         file_size = os.path.getsize(fname)
         words = get_records(f, file_size, hz_offset, py_map)
@@ -158,12 +163,12 @@ use_preset_vocabulary: true
         records = get_words_from_sogou_cell_dict(
             os.path.join("./scel", scel_file))
         print("%s: %s 个词" % (scel_file, len(records)))
-        with open(os.path.join("./out", scel_file.replace(".scel", ".txt")), "w") as fout:
+        with open(os.path.join("./out", scel_file.replace(".scel", ".txt")), "w", encoding="utf-8") as fout:
             dict_file_content.extend(save(records, fout))
         print("-"*80)
 
     print("合并后 %s: %s 个词" % (dict_file, len(dict_file_content) - 1))
-    with open(os.path.join("./out", dict_file), "w") as dictfout:
+    with open(os.path.join("./out", dict_file), "w", encoding="utf-8") as dictfout:
         dictfout.write("\n".join(dict_file_content))
 
 
