@@ -7,29 +7,21 @@ on:
 
 jobs:
   build:
-    name: Build & Release
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     strategy:
       matrix:
         include:
           - goos: linux
             goarch: amd64
-            suffix: ''
           - goos: linux
             goarch: arm64
-            suffix: ''
           - goos: windows
             goarch: amd64
-            suffix: .exe
           - goos: darwin
             goarch: amd64
-            suffix: ''
           - goos: darwin
             goarch: arm64
-            suffix: ''
 
     steps:
       - uses: actions/checkout@v4
@@ -44,11 +36,33 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
         run: |
-          OUTPUT="scel2txt-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.suffix }}"
+          EXT=""
+          [ "${{ matrix.goos }}" = "windows" ] && EXT=".exe"
+          OUTPUT="scel2txt-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}"
           go build -ldflags="-s -w" -o "$OUTPUT" .
-          echo "OUTPUT=$OUTPUT" >> $GITHUB_ENV
 
-      - name: Upload to Release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scel2txt-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: scel2txt-*
+          retention-days: 1
+
+  release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.OUTPUT }}
+          files: dist/*
